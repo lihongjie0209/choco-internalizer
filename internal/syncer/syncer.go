@@ -92,19 +92,32 @@ func (s *Syncer) visit(ctx context.Context, work string, dependency nuspec.Depen
 	if response.IsError() {
 		return fmt.Errorf("download package %s: source returned HTTP %d", dependency.ID, response.StatusCode())
 	}
-	report, err := s.processor.Run(ctx, input, s.output)
+	metadata, err := nuspec.ReadPackage(input)
 	if err != nil {
-		return fmt.Errorf("internalize %s: %w", dependency.ID, err)
+		return fmt.Errorf("inspect package %s: %w", dependency.ID, err)
 	}
-	resolvedKey := strings.ToLower(report.ID) + "@" + report.Version
+	resolvedKey := strings.ToLower(metadata.ID) + "@" + metadata.Version
 	if resolvedKey != stateKey && s.states[resolvedKey] == 1 {
 		return fmt.Errorf("dependency cycle detected at %s", resolvedKey)
 	}
 	s.states[resolvedKey] = 1
-	for _, child := range report.Dependencies {
+	for _, child := range metadata.AllDependencies() {
 		if err := s.visit(ctx, work, child); err != nil {
 			return err
 		}
+	}
+	exists, err := s.publisher.Exists(ctx, s.repository, s.apiKey, metadata.ID, metadata.Version)
+	if err != nil {
+		return fmt.Errorf("check %s %s: %w", metadata.ID, metadata.Version, err)
+	}
+	if exists {
+		s.events = append(s.events, Event{ID: metadata.ID, Version: metadata.Version, Status: "skipped"})
+		s.states[stateKey], s.states[resolvedKey] = 2, 2
+		return nil
+	}
+	report, err := s.processor.Run(ctx, input, s.output)
+	if err != nil {
+		return fmt.Errorf("internalize %s: %w", dependency.ID, err)
 	}
 	skipped, err := s.publisher.Push(ctx, s.repository, s.apiKey, report.Output, publish.Package{
 		ID: report.ID, Version: report.Version, Title: report.Title, Authors: report.Authors,

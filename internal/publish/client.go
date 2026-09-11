@@ -60,22 +60,14 @@ func New() *Client {
 }
 
 func (c *Client) Push(ctx context.Context, repository, apiKey, packagePath string, pkg Package) (bool, error) {
-	base, err := url.Parse(repository)
-	if err != nil || base.Scheme != "https" || base.Host == "" {
-		return false, fmt.Errorf("repository must be an absolute HTTPS URL")
-	}
-	root := strings.TrimRight(repository, "/")
-	checkURL := fmt.Sprintf("%s/api/v2/package/%s/%s", root, url.PathEscape(pkg.ID), url.PathEscape(pkg.Version))
-	check, err := c.http.R().SetContext(ctx).SetHeader("X-NuGet-ApiKey", apiKey).Head(checkURL)
+	exists, err := c.Exists(ctx, repository, apiKey, pkg.ID, pkg.Version)
 	if err != nil {
-		return false, fmt.Errorf("check package existence: %w", err)
+		return false, err
 	}
-	if check.StatusCode() == http.StatusOK {
+	if exists {
 		return true, nil
 	}
-	if check.StatusCode() != http.StatusNotFound {
-		return false, fmt.Errorf("check package existence: repository returned HTTP %d", check.StatusCode())
-	}
+	root := strings.TrimRight(repository, "/")
 	info, err := os.Stat(packagePath)
 	if err != nil {
 		return false, fmt.Errorf("stat package: %w", err)
@@ -94,6 +86,26 @@ func (c *Client) Push(ctx context.Context, repository, apiKey, packagePath strin
 		return false, fmt.Errorf("upload %s: repository returned HTTP %d", filepath.Base(packagePath), response.StatusCode())
 	}
 	return false, nil
+}
+
+func (c *Client) Exists(ctx context.Context, repository, apiKey, id, version string) (bool, error) {
+	base, err := url.Parse(repository)
+	if err != nil || base.Scheme != "https" || base.Host == "" {
+		return false, fmt.Errorf("repository must be an absolute HTTPS URL")
+	}
+	root := strings.TrimRight(repository, "/")
+	checkURL := fmt.Sprintf("%s/api/v2/package/%s/%s", root, url.PathEscape(id), url.PathEscape(version))
+	response, err := c.http.R().SetContext(ctx).SetHeader("X-NuGet-ApiKey", apiKey).Head(checkURL)
+	if err != nil {
+		return false, fmt.Errorf("check package existence: %w", err)
+	}
+	if response.StatusCode() == http.StatusOK {
+		return true, nil
+	}
+	if response.StatusCode() == http.StatusNotFound {
+		return false, nil
+	}
+	return false, fmt.Errorf("check package existence: repository returned HTTP %d", response.StatusCode())
 }
 
 func (c *Client) pushMultipart(ctx context.Context, root, apiKey, packagePath string, pkg Package) (bool, error) {
