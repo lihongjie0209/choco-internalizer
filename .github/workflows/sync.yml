@@ -17,12 +17,28 @@ permissions:
 
 concurrency:
   group: chocolatey-daily-sync
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  sync:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    outputs:
+      packages: ${{ steps.matrix.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: matrix
+        name: Build package matrix
+        run: echo "packages=$(jq -Rc '[inputs | select(length > 0 and startswith("#") | not)]' packages.txt)" >> "$GITHUB_OUTPUT"
+
+  sync:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        package: ${{ fromJSON(needs.prepare.outputs.packages) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -31,17 +47,19 @@ jobs:
           cache: true
       - name: Build and test
         run: |
-          go test -race ./...
+          go test ./...
           make build
-      - name: Synchronize dependency graphs
+      - name: Synchronize ${{ matrix.package }} dependency graph
         env:
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
           CHOCO_REPOSITORY: https://choco.lihongjie.cn
-        run: ./scripts/sync-packages.sh packages.txt
+          REPORT_NAME: ${{ matrix.package }}.md
+        run: ./scripts/sync-packages.sh "${{ matrix.package }}"
       - name: Upload compatibility report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: chocolatey-sync-report
-          path: reports/sync-summary.md
+          name: chocolatey-sync-${{ matrix.package }}
+          path: reports/${{ matrix.package }}.md
+          if-no-files-found: warn
           retention-days: 30

@@ -2,10 +2,17 @@
 set -uo pipefail
 
 repository="${CHOCO_REPOSITORY:-https://choco.lihongjie.cn}"
-package_file="${1:-packages.txt}"
 report_dir="${REPORT_DIR:-reports}"
 mkdir -p "$report_dir" dist
-report="$report_dir/sync-summary.md"
+report="$report_dir/${REPORT_NAME:-sync-summary.md}"
+
+if [[ $# -eq 0 ]]; then
+  mapfile -t packages < packages.txt
+elif [[ $# -eq 1 && -f "$1" ]]; then
+  mapfile -t packages < "$1"
+else
+  packages=("$@")
+fi
 
 {
   echo "# Chocolatey sync summary"
@@ -18,7 +25,7 @@ report="$report_dir/sync-summary.md"
 
 success=0
 failed=0
-while IFS= read -r package_name || [[ -n "$package_name" ]]; do
+for package_name in "${packages[@]}"; do
   [[ -z "$package_name" || "$package_name" == \#* ]] && continue
   echo "::group::sync $package_name"
   if output=$(./bin/choco-internalizer sync "$package_name" --output dist --repository "$repository" 2>&1); then
@@ -33,7 +40,7 @@ while IFS= read -r package_name || [[ -n "$package_name" ]]; do
     ((failed+=1))
   fi
   echo "::endgroup::"
-done < "$package_file"
+done
 
 {
   echo

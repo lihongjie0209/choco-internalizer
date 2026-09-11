@@ -55,7 +55,7 @@ CHOCO_API_KEY=... ./bin/choco-internalizer sync 7zip git curl \
   --repository https://choco.lihongjie.cn
 ```
 
-`packages.txt` is synchronized daily by GitHub Actions. A compatibility failure
+`packages.txt` is synchronized daily by an eight-way GitHub Actions matrix. A compatibility failure
 is emitted as a workflow warning and recorded in the job summary, while the
 remaining roots continue. Configure the repository secret `CHOCO_API_KEY`.
 
