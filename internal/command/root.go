@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/lihongjie0209/choco-internalizer/internal/internalize"
+	"github.com/lihongjie0209/choco-internalizer/internal/nuspec"
 	"github.com/lihongjie0209/choco-internalizer/internal/publish"
 	"github.com/lihongjie0209/choco-internalizer/internal/syncer"
 	"github.com/spf13/cobra"
@@ -79,7 +81,12 @@ func newInternalizeCommand() *cobra.Command {
 				if apiKey == "" {
 					return fmt.Errorf("environment variable %s is empty", apiKeyEnv)
 				}
-				skipped, err := publish.New().Push(cmd.Context(), repository, apiKey, report.Output, report.ID, report.Version)
+				skipped, err := publish.New().Push(cmd.Context(), repository, apiKey, report.Output, publish.Package{
+					ID: report.ID, Version: report.Version, Title: report.Title, Authors: report.Authors,
+					Description: report.Description, Summary: report.Summary, Tags: report.Tags,
+					ProjectURL: report.ProjectURL, LicenseURL: report.LicenseURL,
+					Dependencies: formatDependencies(report.Dependencies),
+				})
 				if err != nil {
 					return fmt.Errorf("publish package: %w", err)
 				}
@@ -99,4 +106,12 @@ func newInternalizeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&apiKeyEnv, "api-key-env", "CHOCO_API_KEY", "environment variable containing the push API key")
 	_ = cmd.MarkFlagRequired("input")
 	return cmd
+}
+
+func formatDependencies(dependencies []nuspec.Dependency) string {
+	parts := make([]string, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		parts = append(parts, dependency.ID+":"+dependency.Version)
+	}
+	return strings.Join(parts, "|")
 }

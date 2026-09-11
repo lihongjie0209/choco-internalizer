@@ -12,6 +12,13 @@ type Package struct {
 type Metadata struct {
 	ID           string       `xml:"id"`
 	Version      string       `xml:"version"`
+	Title        string       `xml:"title"`
+	Authors      string       `xml:"authors"`
+	Description  string       `xml:"description"`
+	Summary      string       `xml:"summary"`
+	Tags         string       `xml:"tags"`
+	ProjectURL   string       `xml:"projectUrl"`
+	LicenseURL   string       `xml:"licenseUrl"`
 	Dependencies Dependencies `xml:"dependencies"`
 }
 

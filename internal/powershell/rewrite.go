@@ -13,8 +13,10 @@ import (
 )
 
 var (
-	staticURLAssignment = regexp.MustCompile(`(?is)^\s*\$(url64bit|url64|url32|url)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
-	staticURLHashEntry  = regexp.MustCompile(`(?is)^\s*(url64bit|url64|url32|url)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
+	staticURLAssignment = regexp.MustCompile(`(?is)^\s*(\$[\w]+(?:\.[\w]+)?)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
+	staticURLHashEntry  = regexp.MustCompile(`(?is)^\s*(url[\w]*)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
+	constantAssignment  = regexp.MustCompile(`(?im)^\s*\$([\w]+)\s*=\s*['"]([^'"\r\n]+)['"]\s*$`)
+	variableReference   = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)`)
 	httpReference       = regexp.MustCompile(`(?i)https?://[^\s'"<>]+`)
 )
 
@@ -30,7 +32,15 @@ type edit struct {
 	replacement string
 }
 
+type Options struct {
+	PackageVersion string
+}
+
 func Rewrite(script string) (string, []Resource, error) {
+	return RewriteWithOptions(script, Options{})
+}
+
+func RewriteWithOptions(script string, options Options) (string, []Resource, error) {
 	source := []byte(script)
 	parser := tree_sitter.NewParser()
 	defer parser.Close()
@@ -48,116 +58,131 @@ func Rewrite(script string) (string, []Resource, error) {
 		return "", nil, fmt.Errorf("parse PowerShell: syntax tree contains errors")
 	}
 
+	constants := map[string]string{"packageversion": options.PackageVersion, "packagepnpmversion": options.PackageVersion}
+	for _, match := range constantAssignment.FindAllStringSubmatch(script, -1) {
+		constants[strings.ToLower(match[1])] = match[2]
+	}
 	var edits []edit
 	var resources []Resource
-	activeURLs := externalURLs(root, source)
-	supportedHelper := false
-	zipHelper := false
-	walk(root, func(node *tree_sitter.Node) {
-		if node.Kind() != "command_name" {
+	var unresolved []string
+	seenEdits := make(map[[2]uint]bool)
+	seenResources := make(map[string]bool)
+	filenameOwners := make(map[string]string)
+	hasToolsDir := false
+	addResource := func(node *tree_sitter.Node, rawURL, variable string) {
+		resolved, ok := resolveURL(rawURL, constants)
+		if !ok {
+			unresolved = append(unresolved, rawURL)
 			return
 		}
-		switch {
-		case strings.EqualFold(strings.TrimSpace(node.Utf8Text(source)), "Install-ChocolateyPackage"):
-			supportedHelper = true
-		case strings.EqualFold(strings.TrimSpace(node.Utf8Text(source)), "Install-ChocolateyZipPackage"):
-			supportedHelper, zipHelper = true, true
+		filename := resourceFilename(resolved, variable)
+		if owner, exists := filenameOwners[strings.ToLower(filename)]; exists && owner != resolved {
+			ext := path.Ext(filename)
+			base := strings.TrimSuffix(filename, ext)
+			filename = base + "-" + safeFilenamePart(variable) + ext
 		}
-	})
-	hasToolsDir := false
+		filenameOwners[strings.ToLower(filename)] = resolved
+		key := [2]uint{node.StartByte(), node.EndByte()}
+		if seenEdits[key] {
+			return
+		}
+		seenEdits[key] = true
+		edits = append(edits, edit{node.StartByte(), node.EndByte(), fmt.Sprintf("([Uri](Join-Path $toolsDir '%s')).AbsoluteUri", escapeSingleQuote(filename))})
+		resourceKey := resolved + "\x00" + filename
+		if !seenResources[resourceKey] {
+			seenResources[resourceKey] = true
+			resources = append(resources, Resource{URL: resolved, Filename: filename, Variable: variable})
+		}
+	}
 	walk(root, func(node *tree_sitter.Node) {
 		nodeText := node.Utf8Text(source)
+		if strings.Contains(strings.ToLower(nodeText), "$toolsdir") {
+			hasToolsDir = true
+		}
 		switch node.Kind() {
 		case "assignment_expression":
 			match := staticURLAssignment.FindStringSubmatch(nodeText)
-			if match == nil {
-				if strings.Contains(strings.ToLower(nodeText), "$toolsdir") {
-					hasToolsDir = true
-				}
-				return
-			}
-			variable := strings.ToLower(match[1])
-			resourceURL := match[2]
-			filename := resourceFilename(resourceURL, variable)
-			localVariable := "file"
-			if variable == "url64bit" {
-				localVariable = "file64"
-			}
-			resources = append(resources, Resource{URL: resourceURL, Filename: filename, Variable: variable})
-			edits = append(edits, edit{node.StartByte(), node.EndByte(), fmt.Sprintf("$%s = Join-Path $toolsDir '%s'", localVariable, escapeSingleQuote(filename))})
-		case "hash_entry":
-			match := staticURLHashEntry.FindStringSubmatch(nodeText)
-			if match == nil {
-				return
-			}
-			variable, resourceURL := strings.ToLower(match[1]), match[2]
-			filename := resourceFilename(resourceURL, variable)
-			localKey := "File"
-			if strings.Contains(variable, "64") {
-				localKey = "File64"
-			}
-			if zipHelper {
-				localKey = "FileFullPath"
-				if strings.Contains(variable, "64") {
-					localKey = "FileFullPath64"
+			if match != nil && strings.Contains(strings.ToLower(match[1]), "url") {
+				literal := findURLStringNode(node, source)
+				if literal != nil {
+					addResource(literal, match[2], strings.TrimPrefix(match[1], "$"))
 				}
 			}
-			resources = append(resources, Resource{URL: resourceURL, Filename: filename, Variable: variable})
-			edits = append(edits, edit{node.StartByte(), node.EndByte(), fmt.Sprintf("%s = Join-Path $toolsDir '%s'", localKey, escapeSingleQuote(filename))})
 		case "command_name":
-			if strings.EqualFold(strings.TrimSpace(nodeText), "Install-ChocolateyPackage") {
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "Install-ChocolateyInstallPackage"})
+			if isDownloadHelper(nodeText) {
+				for _, literal := range stringChildren(node.Parent(), source) {
+					if rawURL := httpReference.FindString(literal.Utf8Text(source)); rawURL != "" {
+						addResource(literal, rawURL, "url")
+					}
+				}
 			}
-			if strings.EqualFold(strings.TrimSpace(nodeText), "Install-ChocolateyZipPackage") {
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "Get-ChocolateyUnzip"})
-			}
-		case "command_parameter":
-			switch {
-			case strings.EqualFold(nodeText, "-Url64bit"):
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "-File64"})
-			case strings.EqualFold(nodeText, "-Url"):
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "-File"})
-			case zipHelper && strings.EqualFold(nodeText, "-UnzipLocation"):
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "-Destination"})
-			}
-		case "variable":
-			if insideStaticURLAssignment(node, source) {
-				return
-			}
-			switch {
-			case strings.EqualFold(nodeText, "$url64bit"):
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "$file64"})
-			case strings.EqualFold(nodeText, "$url"):
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "$file"})
-			case strings.EqualFold(nodeText, "$url64"):
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "$file64"})
-			case strings.EqualFold(nodeText, "$url32"):
-				edits = append(edits, edit{node.StartByte(), node.EndByte(), "$file"})
+		}
+		match := staticURLHashEntry.FindStringSubmatch(nodeText)
+		if match != nil {
+			literal := findURLStringNode(node, source)
+			if literal != nil {
+				addResource(literal, match[2], strings.ToLower(match[1]))
 			}
 		}
 	})
 
-	if len(resources) == 0 {
-		if len(activeURLs) > 0 {
-			return "", nil, fmt.Errorf("no supported static URL assignments found")
-		}
-		return script, nil, nil
+	if len(unresolved) > 0 {
+		sort.Strings(unresolved)
+		return "", nil, fmt.Errorf("unresolved dynamic download URLs: %s", strings.Join(unresolved, ", "))
 	}
-	if !supportedHelper {
-		return "", nil, fmt.Errorf("unsupported PowerShell download helper")
+	if len(resources) == 0 {
+		return script, nil, nil
 	}
 	rewritten := applyEdits(source, edits)
 	if !hasToolsDir {
 		rewritten = "$toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition\r\n" + rewritten
 	}
-	remaining, err := parseExternalURLs(rewritten)
-	if err != nil {
-		return "", nil, err
-	}
-	if len(remaining) > 0 {
-		return "", nil, fmt.Errorf("unresolved external URLs: %s", strings.Join(remaining, ", "))
-	}
 	return rewritten, resources, nil
+}
+
+func safeFilenamePart(value string) string {
+	value = strings.ToLower(strings.TrimPrefix(value, "$"))
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, value)
+}
+
+func resolveURL(raw string, constants map[string]string) (string, bool) {
+	resolved := variableReference.ReplaceAllStringFunc(raw, func(value string) string {
+		return constants[strings.ToLower(strings.TrimPrefix(value, "$"))]
+	})
+	return resolved, !variableReference.MatchString(resolved)
+}
+
+func isDownloadHelper(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return strings.Contains(name, "chocolatey") && (strings.Contains(name, "package") || strings.Contains(name, "webfile") || strings.Contains(name, "windowsupdate"))
+}
+
+func findURLStringNode(node *tree_sitter.Node, source []byte) *tree_sitter.Node {
+	var result *tree_sitter.Node
+	walk(node, func(child *tree_sitter.Node) {
+		if result == nil && child.Kind() == "string_literal" && httpReference.MatchString(child.Utf8Text(source)) {
+			result = child
+		}
+	})
+	return result
+}
+
+func stringChildren(node *tree_sitter.Node, source []byte) []*tree_sitter.Node {
+	if node == nil {
+		return nil
+	}
+	var result []*tree_sitter.Node
+	walk(node, func(child *tree_sitter.Node) {
+		if child.Kind() == "string_literal" && httpReference.MatchString(child.Utf8Text(source)) {
+			result = append(result, child)
+		}
+	})
+	return result
 }
 
 func parseExternalURLs(script string) ([]string, error) {
@@ -187,15 +212,6 @@ func externalURLs(root *tree_sitter.Node, source []byte) []string {
 		result = append(result, httpReference.FindAllString(node.Utf8Text(source), -1)...)
 	})
 	return result
-}
-
-func insideStaticURLAssignment(node *tree_sitter.Node, source []byte) bool {
-	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
-		if parent.Kind() == "assignment_expression" {
-			return staticURLAssignment.MatchString(parent.Utf8Text(source))
-		}
-	}
-	return false
 }
 
 func walk(node *tree_sitter.Node, visit func(*tree_sitter.Node)) {

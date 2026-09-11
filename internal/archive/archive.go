@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const maxEntrySize = 64 << 20
+const maxEntrySize int64 = 4 << 30
 
 type Package struct {
 	Files map[string][]byte
@@ -30,7 +30,7 @@ func Read(path string) (*Package, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		if f.UncompressedSize64 > maxEntrySize {
+		if f.UncompressedSize64 > uint64(maxEntrySize) {
 			return nil, fmt.Errorf("archive entry too large: %s", name)
 		}
 		rc, err := f.Open()
@@ -45,7 +45,7 @@ func Read(path string) (*Package, error) {
 		if closeErr != nil {
 			return nil, fmt.Errorf("close archive entry %s: %w", name, closeErr)
 		}
-		if len(data) > maxEntrySize {
+		if int64(len(data)) > maxEntrySize {
 			return nil, fmt.Errorf("archive entry too large: %s", name)
 		}
 		files[name] = data

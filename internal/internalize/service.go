@@ -31,6 +31,13 @@ type Report struct {
 	Output       string
 	ID           string
 	Version      string
+	Title        string
+	Authors      string
+	Description  string
+	Summary      string
+	Tags         string
+	ProjectURL   string
+	LicenseURL   string
 	Dependencies []nuspec.Dependency
 	Resources    []ResourceReport
 }
@@ -63,26 +70,33 @@ func (s *Service) Run(ctx context.Context, input, output string) (Report, error)
 	if !found {
 		return Report{}, fmt.Errorf("nupkg does not contain a nuspec")
 	}
-	report := Report{ID: metadata.ID, Version: metadata.Version, Dependencies: metadata.AllDependencies()}
+	report := Report{
+		ID: metadata.ID, Version: metadata.Version, Title: metadata.Title,
+		Authors: metadata.Authors, Description: metadata.Description,
+		Summary: metadata.Summary, Tags: metadata.Tags,
+		ProjectURL: metadata.ProjectURL, LicenseURL: metadata.LicenseURL,
+		Dependencies: metadata.AllDependencies(),
+	}
 	for name, data := range pkg.Files {
 		if !strings.EqualFold(filepath.Base(name), "chocolateyInstall.ps1") {
 			continue
 		}
-		rewritten, resources, rewriteErr := powershell.Rewrite(string(data))
+		rewritten, resources, rewriteErr := powershell.RewriteWithOptions(string(data), powershell.Options{PackageVersion: metadata.Version})
 		if rewriteErr != nil {
 			return Report{}, fmt.Errorf("rewrite %s: %w", name, rewriteErr)
 		}
 		pkg.Files[name] = []byte(rewritten)
 		for _, resource := range resources {
-			body, downloadErr := s.download(ctx, resource.URL)
-			if downloadErr != nil {
-				return Report{}, fmt.Errorf("download %s: %w", resource.URL, downloadErr)
-			}
 			target := filepath.ToSlash(filepath.Join(filepath.Dir(name), resource.Filename))
-			if _, exists := pkg.Files[target]; exists {
-				return Report{}, fmt.Errorf("resource target already exists: %s", target)
+			body, exists := pkg.Files[target]
+			if !exists {
+				var downloadErr error
+				body, downloadErr = s.download(ctx, resource.URL)
+				if downloadErr != nil {
+					return Report{}, fmt.Errorf("download %s: %w", resource.URL, downloadErr)
+				}
+				pkg.Files[target] = body
 			}
-			pkg.Files[target] = body
 			hash := sha256.Sum256(body)
 			report.Resources = append(report.Resources, ResourceReport{URL: resource.URL, Path: target, Size: int64(len(body)), SHA256: hex.EncodeToString(hash[:])})
 		}

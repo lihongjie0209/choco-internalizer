@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -15,8 +14,6 @@ import (
 	"github.com/lihongjie0209/choco-internalizer/internal/nuspec"
 	"github.com/lihongjie0209/choco-internalizer/internal/publish"
 )
-
-var versionToken = regexp.MustCompile(`[0-9]+(?:\.[0-9A-Za-z-]+)+`)
 
 type Event struct {
 	ID, Version, Status string
@@ -104,7 +101,12 @@ func (s *Syncer) visit(ctx context.Context, work string, dependency nuspec.Depen
 			return err
 		}
 	}
-	skipped, err := s.publisher.Push(ctx, s.repository, s.apiKey, report.Output, report.ID, report.Version)
+	skipped, err := s.publisher.Push(ctx, s.repository, s.apiKey, report.Output, publish.Package{
+		ID: report.ID, Version: report.Version, Title: report.Title, Authors: report.Authors,
+		Description: report.Description, Summary: report.Summary, Tags: report.Tags,
+		ProjectURL: report.ProjectURL, LicenseURL: report.LicenseURL,
+		Dependencies: dependencyString(report.Dependencies),
+	})
 	if err != nil {
 		return fmt.Errorf("publish %s %s: %w", report.ID, report.Version, err)
 	}
@@ -117,6 +119,14 @@ func (s *Syncer) visit(ctx context.Context, work string, dependency nuspec.Depen
 	return nil
 }
 
+func dependencyString(dependencies []nuspec.Dependency) string {
+	parts := make([]string, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		parts = append(parts, dependency.ID+":"+dependency.Version)
+	}
+	return strings.Join(parts, "|")
+}
+
 func selectVersion(constraint string) string {
 	constraint = strings.TrimSpace(constraint)
 	if constraint == "" {
@@ -125,7 +135,10 @@ func selectVersion(constraint string) string {
 	if strings.HasPrefix(constraint, "[") && strings.HasSuffix(constraint, "]") && !strings.Contains(constraint, ",") {
 		return strings.TrimSpace(constraint[1 : len(constraint)-1])
 	}
-	return versionToken.FindString(constraint)
+	// NuGet ranges such as [1.0,2.0) express bounds, not a request for the
+	// lower-bound package. Let the feed resolve its latest compatible package;
+	// only [1.2.3] is an exact version.
+	return ""
 }
 
 func safeName(value string) string {
