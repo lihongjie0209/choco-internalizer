@@ -37,7 +37,7 @@ jobs:
           make build
       - id: matrix
         name: Build package matrix
-        run: echo "packages=$(jq -Rc '[inputs | select(length > 0 and startswith("#") | not)]' packages.txt)" >> "$GITHUB_OUTPUT"
+        run: echo "packages=$(jq -Rsc 'split("\n") | map(select(length > 0 and (startswith("#") | not)))' packages.txt)" >> "$GITHUB_OUTPUT"
       - name: Upload internalizer binary
         uses: actions/upload-artifact@v4
         with:
@@ -83,6 +83,7 @@ jobs:
     needs: sync
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Download package reports
         uses: actions/download-artifact@v4
         with:
@@ -92,11 +93,13 @@ jobs:
       - name: Build aggregate report
         run: |
           total=$(find reports -name '*.md' -type f | wc -l)
+          expected=$(awk 'NF && $1 !~ /^#/ { count++ } END { print count+0 }' packages.txt)
           failures=$(grep -l '⚠️' reports/*.md 2>/dev/null | wc -l)
           {
             echo '# Chocolatey synchronization audit'
             echo
             echo "Package roots checked: $total"
+            echo "Package roots expected: $expected"
             echo "Compatibility failures: $failures"
             echo
             if (( failures > 0 )); then
@@ -105,6 +108,10 @@ jobs:
               grep '⚠️' reports/*.md || true
             else
               echo 'All package roots and their recursive dependencies synchronized successfully.'
+            fi
+            if (( total != expected )); then
+              echo
+              echo "⚠️ Missing reports: expected $expected but found $total."
             fi
           } | tee audit.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload aggregate report
