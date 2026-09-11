@@ -26,9 +26,23 @@ jobs:
       packages: ${{ steps.matrix.outputs.packages }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test and build once
+        run: |
+          go test -race ./...
+          make build
       - id: matrix
         name: Build package matrix
         run: echo "packages=$(jq -Rc '[inputs | select(length > 0 and startswith("#") | not)]' packages.txt)" >> "$GITHUB_OUTPUT"
+      - name: Upload internalizer binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: choco-internalizer-linux
+          path: bin/choco-internalizer
+          retention-days: 1
 
   sync:
     needs: prepare
@@ -41,14 +55,13 @@ jobs:
         package: ${{ fromJSON(needs.prepare.outputs.packages) }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Download internalizer binary
+        uses: actions/download-artifact@v4
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: Build and test
-        run: |
-          go test ./...
-          make build
+          name: choco-internalizer-linux
+          path: bin
+      - name: Prepare binary
+        run: chmod +x bin/choco-internalizer
       - name: Synchronize ${{ matrix.package }} dependency graph
         env:
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
