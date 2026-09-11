@@ -1,0 +1,40 @@
+name: Sync Chocolatey packages
+
+on:
+  schedule:
+    - cron: "15 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chocolatey-daily-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build and test
+        run: |
+          go test -race ./...
+          make build
+      - name: Synchronize dependency graphs
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+          CHOCO_REPOSITORY: https://choco.lihongjie.cn
+        run: ./scripts/sync-packages.sh packages.txt
+      - name: Upload compatibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chocolatey-sync-report
+          path: reports/sync-summary.md
+          retention-days: 30
