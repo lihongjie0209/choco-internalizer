@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -43,7 +44,11 @@ func New(options Options) (*Syncer, error) {
 			return nil, fmt.Errorf("%s must be an absolute HTTPS URL", name)
 		}
 	}
-	client := resty.New().SetTimeout(2 * time.Hour).SetRetryCount(2)
+	client := resty.New().SetTimeout(2 * time.Hour).SetRetryCount(3).
+		SetRetryWaitTime(time.Second).SetRetryMaxWaitTime(15 * time.Second)
+	client.AddRetryCondition(func(response *resty.Response, err error) bool {
+		return err != nil || response.StatusCode() == http.StatusTooManyRequests || response.StatusCode() >= 500
+	})
 	return &Syncer{
 		http: client, processor: internalize.New(client.GetClient(), internalize.Options{MaxDownloadSize: options.MaxDownloadSize}),
 		publisher: publish.New(), source: strings.TrimRight(options.Source, "/"), repository: options.Repository,

@@ -51,7 +51,12 @@ const (
 )
 
 func New() *Client {
-	return &Client{http: resty.New().SetTimeout(2 * time.Hour).SetRetryCount(2)}
+	client := resty.New().SetTimeout(2 * time.Hour).SetRetryCount(3).
+		SetRetryWaitTime(time.Second).SetRetryMaxWaitTime(15 * time.Second)
+	client.AddRetryCondition(func(response *resty.Response, err error) bool {
+		return err != nil || response.StatusCode() == http.StatusTooManyRequests || response.StatusCode() >= 500
+	})
+	return &Client{http: client}
 }
 
 func (c *Client) Push(ctx context.Context, repository, apiKey, packagePath string, pkg Package) (bool, error) {
