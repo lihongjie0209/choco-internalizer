@@ -5,7 +5,7 @@ git-lfs
 vscode
 notepadplusplus
 powershell-core
-windows-terminal
+microsoft-windows-terminal
 sysinternals
 everything
 curl

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>realvnc</id>
+    <version>1.0.0</version>
+    <title>RealVNC Viewer compatibility package</title>
+    <authors>Internal Repository</authors>
+    <description>Compatibility package that installs the maintained vnc-viewer Chocolatey package.</description>
+    <summary>Install RealVNC Viewer from the maintained vnc-viewer package.</summary>
+    <tags>realvnc vnc viewer compatibility</tags>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <dependencies>
+      <dependency id="vnc-viewer" />
+    </dependencies>
+  </metadata>
+</package>

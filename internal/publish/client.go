@@ -136,27 +136,9 @@ func (c *Client) pushMultipart(ctx context.Context, root, apiKey, packagePath st
 		size := min(int64(partSize), info.Size()-offset)
 		endpoint := root + "/api/v2/upload/part?key=" + url.QueryEscape(start.Key) +
 			"&uploadId=" + url.QueryEscape(start.UploadID) + "&partNumber=" + fmt.Sprint(partNumber)
-		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, io.NewSectionReader(file, offset, size))
-		if requestErr != nil {
-			return false, fmt.Errorf("create upload part %d: %w", partNumber, requestErr)
-		}
-		request.Header.Set("X-NuGet-ApiKey", apiKey)
-		request.ContentLength = size
-		partResponse, requestErr := c.http.GetClient().Do(request)
-		if requestErr != nil {
-			return false, fmt.Errorf("upload part %d: %w", partNumber, requestErr)
-		}
-		var part uploadedPart
-		decodeErr := json.NewDecoder(partResponse.Body).Decode(&part)
-		closeErr := partResponse.Body.Close()
-		if partResponse.StatusCode < 200 || partResponse.StatusCode >= 300 {
-			return false, fmt.Errorf("upload part %d: repository returned HTTP %d", partNumber, partResponse.StatusCode)
-		}
-		if decodeErr != nil {
-			return false, fmt.Errorf("decode upload part %d: %w", partNumber, decodeErr)
-		}
-		if closeErr != nil {
-			return false, fmt.Errorf("close upload part %d response: %w", partNumber, closeErr)
+		part, uploadErr := c.uploadPart(ctx, endpoint, apiKey, file, offset, size, partNumber)
+		if uploadErr != nil {
+			return false, uploadErr
 		}
 		parts = append(parts, part)
 	}
@@ -170,4 +152,52 @@ func (c *Client) pushMultipart(ctx context.Context, root, apiKey, packagePath st
 		return false, fmt.Errorf("complete multipart upload: repository returned HTTP %d", response.StatusCode())
 	}
 	return false, nil
+}
+
+func (c *Client) uploadPart(ctx context.Context, endpoint, apiKey string, file *os.File, offset, size int64, partNumber int) (uploadedPart, error) {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, io.NewSectionReader(file, offset, size))
+		if err != nil {
+			return uploadedPart{}, fmt.Errorf("create upload part %d: %w", partNumber, err)
+		}
+		request.Header.Set("X-NuGet-ApiKey", apiKey)
+		request.ContentLength = size
+		request.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(io.NewSectionReader(file, offset, size)), nil
+		}
+		response, err := c.http.GetClient().Do(request)
+		if err == nil && response.StatusCode >= 200 && response.StatusCode < 300 {
+			var part uploadedPart
+			decodeErr := json.NewDecoder(response.Body).Decode(&part)
+			closeErr := response.Body.Close()
+			if decodeErr != nil {
+				return uploadedPart{}, fmt.Errorf("decode upload part %d: %w", partNumber, decodeErr)
+			}
+			if closeErr != nil {
+				return uploadedPart{}, fmt.Errorf("close upload part %d response: %w", partNumber, closeErr)
+			}
+			return part, nil
+		}
+		if response != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+			_ = response.Body.Close()
+			if response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests {
+				return uploadedPart{}, fmt.Errorf("upload part %d: repository returned HTTP %d", partNumber, response.StatusCode)
+			}
+			lastErr = fmt.Errorf("repository returned HTTP %d", response.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if attempt < 3 {
+			timer := time.NewTimer(time.Duration(1<<attempt) * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return uploadedPart{}, fmt.Errorf("upload part %d: %w", partNumber, ctx.Err())
+			case <-timer.C:
+			}
+		}
+	}
+	return uploadedPart{}, fmt.Errorf("upload part %d after retries: %w", partNumber, lastErr)
 }

@@ -6,6 +6,7 @@ on:
     paths:
       - packages.txt
       - internal/**
+      - aliases/**
       - scripts/sync-packages.sh
       - .github/workflows/sync.yml
   schedule:
@@ -75,4 +76,40 @@ jobs:
           name: chocolatey-sync-${{ matrix.package }}
           path: reports/${{ matrix.package }}.md
           if-no-files-found: warn
+          retention-days: 30
+
+  audit:
+    if: always()
+    needs: sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download package reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: chocolatey-sync-*
+          path: reports
+          merge-multiple: true
+      - name: Build aggregate report
+        run: |
+          total=$(find reports -name '*.md' -type f | wc -l)
+          failures=$(grep -l '⚠️' reports/*.md 2>/dev/null | wc -l)
+          {
+            echo '# Chocolatey synchronization audit'
+            echo
+            echo "Package roots checked: $total"
+            echo "Compatibility failures: $failures"
+            echo
+            if (( failures > 0 )); then
+              echo '## Packages requiring attention'
+              echo
+              grep '⚠️' reports/*.md || true
+            else
+              echo 'All package roots and their recursive dependencies synchronized successfully.'
+            fi
+          } | tee audit.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload aggregate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: chocolatey-sync-audit
+          path: audit.md
           retention-days: 30

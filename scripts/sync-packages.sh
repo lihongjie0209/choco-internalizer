@@ -25,10 +25,30 @@ fi
 
 success=0
 failed=0
+sync_package() {
+  local package_name="$1"
+  local alias_dir="aliases/$package_name"
+  if [[ ! -d "$alias_dir" ]]; then
+    ./bin/choco-internalizer sync "$package_name" --output dist --repository "$repository"
+    return
+  fi
+
+  while IFS= read -r dependency; do
+    [[ -z "$dependency" || "$dependency" == \#* ]] && continue
+    ./bin/choco-internalizer sync "$dependency" --output dist --repository "$repository"
+  done < "$alias_dir/dependencies.txt"
+  local alias_work
+  alias_work=$(mktemp -d)
+  local package_path="$alias_work/$package_name.nupkg"
+  (cd "$alias_dir" && zip -qr "$package_path" . -x dependencies.txt)
+  ./bin/choco-internalizer internalize --input "$package_path" --output "$alias_work/output" --repository "$repository"
+  rm -rf "$alias_work"
+}
+
 for package_name in "${packages[@]}"; do
   [[ -z "$package_name" || "$package_name" == \#* ]] && continue
   echo "::group::sync $package_name"
-  if output=$(./bin/choco-internalizer sync "$package_name" --output dist --repository "$repository" 2>&1); then
+  if output=$(sync_package "$package_name" 2>&1); then
     echo "$output"
     printf '| `%s` | ✅ synchronized |\n' "$package_name" >> "$report"
     ((success+=1))
