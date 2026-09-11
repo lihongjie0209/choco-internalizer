@@ -1,6 +1,13 @@
 name: Sync Chocolatey packages
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - packages.txt
+      - internal/**
+      - scripts/sync-packages.sh
+      - .github/workflows/sync.yml
   schedule:
     - cron: "15 18 * * *"
   workflow_dispatch:
