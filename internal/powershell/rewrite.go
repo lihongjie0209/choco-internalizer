@@ -45,6 +45,14 @@ func Rewrite(script string) (string, []Resource, error) {
 }
 
 func RewriteWithOptions(script string, options Options) (string, []Resource, error) {
+	hadUTF8BOM := strings.HasPrefix(script, "\uFEFF")
+	script = strings.TrimPrefix(script, "\uFEFF")
+	restoreBOM := func(value string) string {
+		if hadUTF8BOM {
+			return "\uFEFF" + value
+		}
+		return value
+	}
 	source := []byte(script)
 	parser := tree_sitter.NewParser()
 	defer parser.Close()
@@ -139,13 +147,13 @@ func RewriteWithOptions(script string, options Options) (string, []Resource, err
 		return "", nil, fmt.Errorf("unresolved dynamic download URLs: %s", strings.Join(unresolved, ", "))
 	}
 	if len(resources) == 0 {
-		return script, nil, nil
+		return restoreBOM(script), nil, nil
 	}
 	rewritten := applyEdits(source, edits)
 	if !hasToolsDir {
 		rewritten = "$toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition\r\n" + rewritten
 	}
-	return rewritten, resources, nil
+	return restoreBOM(rewritten), resources, nil
 }
 
 func safeFilenamePart(value string) string {

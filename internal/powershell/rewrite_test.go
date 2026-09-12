@@ -109,3 +109,27 @@ func TestRewriteIgnoresInformationalURLs(t *testing.T) {
 		t.Fatalf("Rewrite() modified informational URL: %s, %#v", got, resources)
 	}
 }
+
+func TestRewritePreservesUTF8BOMAtFileStart(t *testing.T) {
+	t.Parallel()
+	script := "\uFEFF$ErrorActionPreference = 'Stop'\r\n" +
+		"$url = 'https://downloads.example.test/app.exe'\r\n" +
+		"Install-ChocolateyPackage -PackageName demo -FileType exe -Url $url"
+
+	got, resources, err := Rewrite(script)
+	if err != nil {
+		t.Fatalf("Rewrite() error = %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("Rewrite() resources = %d, want 1", len(resources))
+	}
+	if !strings.HasPrefix(got, "\uFEFF$toolsDir = ") {
+		t.Fatalf("Rewrite() did not preserve BOM at byte zero: %q", got[:min(len(got), 80)])
+	}
+	if strings.Contains(strings.TrimPrefix(got, "\uFEFF"), "\uFEFF") {
+		t.Fatal("Rewrite() left a BOM inside the script")
+	}
+	if !strings.HasPrefix(got, string([]byte{0xEF, 0xBB, 0xBF})) {
+		t.Fatalf("Rewrite() prefix = % X, want UTF-8 BOM", []byte(got)[:3])
+	}
+}
