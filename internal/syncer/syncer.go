@@ -62,12 +62,32 @@ func (s *Syncer) Sync(ctx context.Context, packages []string) ([]Event, error) {
 		return nil, fmt.Errorf("create temporary directory: %w", err)
 	}
 	defer os.RemoveAll(work)
-	for _, id := range packages {
-		if err := s.visit(ctx, work, nuspec.Dependency{ID: id}); err != nil {
+	for _, spec := range packages {
+		dependency, parseErr := parsePackageSpec(spec)
+		if parseErr != nil {
+			return s.events, parseErr
+		}
+		if err := s.visit(ctx, work, dependency); err != nil {
 			return s.events, err
 		}
 	}
 	return s.events, nil
+}
+
+func parsePackageSpec(spec string) (nuspec.Dependency, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nuspec.Dependency{}, fmt.Errorf("package spec must not be empty")
+	}
+	id, version, found := strings.Cut(spec, "@")
+	if !found {
+		return nuspec.Dependency{ID: spec}, nil
+	}
+	id, version = strings.TrimSpace(id), strings.TrimSpace(version)
+	if id == "" || version == "" || strings.Contains(version, "@") {
+		return nuspec.Dependency{}, fmt.Errorf("invalid package spec %q; expected id@version", spec)
+	}
+	return nuspec.Dependency{ID: id, Version: "[" + version + "]"}, nil
 }
 
 func (s *Syncer) visit(ctx context.Context, work string, dependency nuspec.Dependency) error {

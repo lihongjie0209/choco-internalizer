@@ -15,13 +15,46 @@ func TestRewrite(t *testing.T) {
 	if len(resources) != 1 || resources[0].Filename != "demo.exe" {
 		t.Fatalf("Rewrite() resources = %#v", resources)
 	}
-	for _, expected := range []string{"$toolsDir = Split-Path", "$url64bit = ([Uri](Join-Path $toolsDir 'demo.exe')).AbsoluteUri", "Install-ChocolateyPackage", "-Url64bit $url64bit"} {
+	for _, expected := range []string{"$toolsDir = Split-Path", "$url64bit = (Join-Path $toolsDir 'demo.exe')", "Install-ChocolateyInstallPackage", "-File64 $url64bit"} {
 		if !strings.Contains(got, expected) {
 			t.Errorf("Rewrite() missing %q:\n%s", expected, got)
 		}
 	}
 	if httpReference.MatchString(got) {
 		t.Errorf("Rewrite() retained external URL: %s", got)
+	}
+}
+
+func TestRewriteUsesOriginalExecutableNameForLocalInstaller(t *testing.T) {
+	t.Parallel()
+	script := `$url = 'https://example.test/rustup-init.exe'
+$url64 = 'https://example.test/rustup-init-x64.exe'
+$packageArgs = @{
+  url = $url
+  url64bit = $url64
+  silentArgs = '-y'
+}
+Install-ChocolateyPackage @packageArgs`
+	got, resources, err := Rewrite(script)
+	if err != nil {
+		t.Fatalf("Rewrite() error = %v", err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("Rewrite() resources = %#v", resources)
+	}
+	for _, expected := range []string{
+		"$url = (Join-Path $toolsDir 'rustup-init.exe')",
+		"$url64 = (Join-Path $toolsDir 'rustup-init-x64.exe')",
+		"file = $url",
+		"file64 = $url64",
+		"Install-ChocolateyInstallPackage @packageArgs",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Errorf("Rewrite() missing %q:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(strings.ToLower(got), "install-chocolateypackage") {
+		t.Fatalf("Rewrite() retained download helper:\n%s", got)
 	}
 }
 
@@ -49,7 +82,7 @@ func TestRewriteHandlesMultilineCommandAndIgnoresCommentText(t *testing.T) {
 	if len(resources) != 1 {
 		t.Fatalf("Rewrite() resources = %#v", resources)
 	}
-	if !strings.Contains(got, "-Url $url") {
+	if !strings.Contains(got, "-File $url") {
 		t.Fatalf("Rewrite() did not rewrite multiline parameter:\n%s", got)
 	}
 	if !strings.Contains(got, "# Install-ChocolateyPackage is mentioned") {

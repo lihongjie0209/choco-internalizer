@@ -22,6 +22,8 @@ var (
 	bracedVariableRef   = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 	variableReference   = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)`)
 	httpReference       = regexp.MustCompile(`(?i)https?://[^\s'"<>]+`)
+	url64HashtableKey   = regexp.MustCompile(`(?im)^(\s*)url64bit(\s*=)`)
+	urlHashtableKey     = regexp.MustCompile(`(?im)^(\s*)url(\s*=)`)
 )
 
 type Resource struct {
@@ -69,6 +71,12 @@ func RewriteWithOptions(script string, options Options) (string, []Resource, err
 	if root.HasError() {
 		return "", nil, fmt.Errorf("parse PowerShell: syntax tree contains errors")
 	}
+	usesLocalInstallHelper := false
+	walk(root, func(node *tree_sitter.Node) {
+		if node.Kind() == "command_name" && strings.EqualFold(strings.TrimSpace(node.Utf8Text(source)), "Install-ChocolateyPackage") {
+			usesLocalInstallHelper = true
+		}
+	})
 
 	constants := map[string]string{
 		"packageversion":           options.PackageVersion,
@@ -103,7 +111,11 @@ func RewriteWithOptions(script string, options Options) (string, []Resource, err
 			return
 		}
 		seenEdits[key] = true
-		edits = append(edits, edit{node.StartByte(), node.EndByte(), fmt.Sprintf("([Uri](Join-Path $toolsDir '%s')).AbsoluteUri", escapeSingleQuote(filename))})
+		replacement := fmt.Sprintf("([Uri](Join-Path $toolsDir '%s')).AbsoluteUri", escapeSingleQuote(filename))
+		if usesLocalInstallHelper {
+			replacement = fmt.Sprintf("(Join-Path $toolsDir '%s')", escapeSingleQuote(filename))
+		}
+		edits = append(edits, edit{node.StartByte(), node.EndByte(), replacement})
 		resourceKey := resolved + "\x00" + filename
 		if !seenResources[resourceKey] {
 			seenResources[resourceKey] = true
@@ -125,12 +137,23 @@ func RewriteWithOptions(script string, options Options) (string, []Resource, err
 				}
 			}
 		case "command_name":
+			if usesLocalInstallHelper && strings.EqualFold(strings.TrimSpace(nodeText), "Install-ChocolateyPackage") {
+				edits = append(edits, edit{node.StartByte(), node.EndByte(), "Install-ChocolateyInstallPackage"})
+			}
 			if isDownloadHelper(nodeText) {
 				for _, literal := range stringChildren(node.Parent(), source) {
 					if rawURL := httpReference.FindString(literal.Utf8Text(source)); rawURL != "" {
 						addResource(literal, rawURL, "url")
 					}
 				}
+			}
+		}
+		if usesLocalInstallHelper && node.Kind() == "command_parameter" {
+			switch strings.ToLower(strings.TrimSpace(nodeText)) {
+			case "-url":
+				edits = append(edits, edit{node.StartByte(), node.EndByte(), "-File"})
+			case "-url64bit":
+				edits = append(edits, edit{node.StartByte(), node.EndByte(), "-File64"})
 			}
 		}
 		match := staticURLHashEntry.FindStringSubmatch(nodeText)
@@ -150,6 +173,10 @@ func RewriteWithOptions(script string, options Options) (string, []Resource, err
 		return restoreBOM(script), nil, nil
 	}
 	rewritten := applyEdits(source, edits)
+	if usesLocalInstallHelper {
+		rewritten = url64HashtableKey.ReplaceAllString(rewritten, "${1}file64${2}")
+		rewritten = urlHashtableKey.ReplaceAllString(rewritten, "${1}file${2}")
+	}
 	if !hasToolsDir {
 		rewritten = "$toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition\r\n" + rewritten
 	}

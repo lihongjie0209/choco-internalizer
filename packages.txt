@@ -95,6 +95,7 @@ codex
 uv
 aliyun-cli
 dotnetfx
+dotnetfx@4.8.0.20220524
 spacesniffer
 treesize
 treesizefree
