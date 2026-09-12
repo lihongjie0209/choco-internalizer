@@ -95,6 +95,8 @@ codex
 uv
 aliyun-cli
 dotnetfx
+spacesniffer
+treesize
 treesizefree
 dotnet3.5
 advanced-ip-scanner
