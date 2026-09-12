@@ -16,6 +16,10 @@ var (
 	staticURLAssignment = regexp.MustCompile(`(?is)^\s*(\$[\w]+(?:\.[\w]+)?)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
 	staticURLHashEntry  = regexp.MustCompile(`(?is)^\s*(url[\w]*)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
 	constantAssignment  = regexp.MustCompile(`(?im)^\s*\$([\w]+)\s*=\s*['"]([^'"\r\n]+)['"]\s*$`)
+	envSubexpressionRef = regexp.MustCompile(`(?i)\$\(\$env:([A-Za-z_][A-Za-z0-9_]*)\)`)
+	subexpressionRef    = regexp.MustCompile(`\$\(\$([A-Za-z_][A-Za-z0-9_]*)\)`)
+	envVariableRef      = regexp.MustCompile(`(?i)\$env:([A-Za-z_][A-Za-z0-9_]*)`)
+	bracedVariableRef   = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 	variableReference   = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)`)
 	httpReference       = regexp.MustCompile(`(?i)https?://[^\s'"<>]+`)
 )
@@ -58,7 +62,11 @@ func RewriteWithOptions(script string, options Options) (string, []Resource, err
 		return "", nil, fmt.Errorf("parse PowerShell: syntax tree contains errors")
 	}
 
-	constants := map[string]string{"packageversion": options.PackageVersion, "packagepnpmversion": options.PackageVersion}
+	constants := map[string]string{
+		"packageversion":           options.PackageVersion,
+		"packagepnpmversion":       options.PackageVersion,
+		"chocolateypackageversion": options.PackageVersion,
+	}
 	for _, match := range constantAssignment.FindAllStringSubmatch(script, -1) {
 		constants[strings.ToLower(match[1])] = match[2]
 	}
@@ -151,7 +159,23 @@ func safeFilenamePart(value string) string {
 }
 
 func resolveURL(raw string, constants map[string]string) (string, bool) {
-	resolved := variableReference.ReplaceAllStringFunc(raw, func(value string) string {
+	resolved := envSubexpressionRef.ReplaceAllStringFunc(raw, func(value string) string {
+		match := envSubexpressionRef.FindStringSubmatch(value)
+		return constants[strings.ToLower(match[1])]
+	})
+	resolved = subexpressionRef.ReplaceAllStringFunc(resolved, func(value string) string {
+		match := subexpressionRef.FindStringSubmatch(value)
+		return constants[strings.ToLower(match[1])]
+	})
+	resolved = bracedVariableRef.ReplaceAllStringFunc(resolved, func(value string) string {
+		match := bracedVariableRef.FindStringSubmatch(value)
+		return constants[strings.ToLower(match[1])]
+	})
+	resolved = envVariableRef.ReplaceAllStringFunc(resolved, func(value string) string {
+		match := envVariableRef.FindStringSubmatch(value)
+		return constants[strings.ToLower(match[1])]
+	})
+	resolved = variableReference.ReplaceAllStringFunc(resolved, func(value string) string {
 		return constants[strings.ToLower(strings.TrimPrefix(value, "$"))]
 	})
 	return resolved, !variableReference.MatchString(resolved)

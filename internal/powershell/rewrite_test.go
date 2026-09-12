@@ -80,6 +80,24 @@ Install-ChocolateyZipPackage @packageArgs`
 	}
 }
 
+func TestRewriteResolvesPowerShellInterpolationForms(t *testing.T) {
+	t.Parallel()
+	script := `$version = '1.22.22'
+$url = "https://example.test/$($version)/tool-${version}.msi"
+$url64 = "https://example.test/$($env:ChocolateyPackageVersion)/tool-x64.msi"
+Install-ChocolateyPackage -Url $url -Url64bit $url64`
+	got, resources, err := RewriteWithOptions(script, Options{PackageVersion: "1.22.22"})
+	if err != nil {
+		t.Fatalf("Rewrite() error = %v", err)
+	}
+	if len(resources) != 2 || resources[0].URL != "https://example.test/1.22.22/tool-1.22.22.msi" || resources[1].URL != "https://example.test/1.22.22/tool-x64.msi" {
+		t.Fatalf("Rewrite() resources = %#v", resources)
+	}
+	if httpReference.MatchString(got) {
+		t.Fatalf("Rewrite() retained download URL: %s", got)
+	}
+}
+
 func TestRewriteIgnoresInformationalURLs(t *testing.T) {
 	t.Parallel()
 	script := `Write-Host 'See https://example.test/help for documentation'`
