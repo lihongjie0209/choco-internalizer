@@ -49,6 +49,7 @@ temurin21
 temurin17
 maven
 gradle
+dotnet
 dotnet-sdk
 cmake
 ninja
@@ -85,6 +86,7 @@ dotnetfx
 treesizefree
 dotnet3.5
 advanced-ip-scanner
+com0com
 wps-office-free
 vcredist-all
 dotnetcore-sdk
