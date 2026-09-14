@@ -14,7 +14,7 @@ import (
 
 var (
 	staticURLAssignment = regexp.MustCompile(`(?is)^\s*(\$[\w]+(?:\.[\w]+)?)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
-	staticURLHashEntry  = regexp.MustCompile(`(?is)^\s*(url[\w]*)\s*=\s*['"](https?://[^'"\r\n]+)['"]\s*$`)
+	staticURLHashEntry  = regexp.MustCompile(`(?is)\b(url[\w]*)\s*=\s*['"](https?://[^'"\r\n]+)['"]`)
 	constantAssignment  = regexp.MustCompile(`(?im)^\s*\$([\w]+)\s*=\s*['"]([^'"\r\n]+)['"]\s*$`)
 	envSubexpressionRef = regexp.MustCompile(`(?i)\$\(\$env:([A-Za-z_][A-Za-z0-9_]*)\)`)
 	subexpressionRef    = regexp.MustCompile(`\$\(\$([A-Za-z_][A-Za-z0-9_]*)\)`)
@@ -301,9 +301,25 @@ func resourceFilename(rawURL, fallback string) string {
 	}
 	filename := path.Base(parsed.Path)
 	if filename == "." || filename == "/" || filename == "" {
+		if product := safeQueryFilenamePart(parsed.Query().Get("product")); product != "" {
+			if platform := safeQueryFilenamePart(parsed.Query().Get("os")); platform != "" {
+				product += "-" + platform
+			}
+			return product + ".exe"
+		}
 		return fallback + ".bin"
 	}
 	return filename
+}
+
+func safeQueryFilenamePart(value string) string {
+	value = strings.TrimSpace(value)
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
+			return r
+		}
+		return '-'
+	}, value)
 }
 
 func escapeSingleQuote(value string) string {

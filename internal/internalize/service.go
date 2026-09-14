@@ -8,12 +8,15 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/lihongjie0209/choco-internalizer/internal/archive"
 	"github.com/lihongjie0209/choco-internalizer/internal/nuspec"
 	"github.com/lihongjie0209/choco-internalizer/internal/powershell"
 )
+
+var firefoxRuntimeLocale = regexp.MustCompile(`(?im)^([ \t]*)\$locale[ \t]*=[ \t]*GetLocale\b[^\r\n]*`)
 
 type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
@@ -81,7 +84,8 @@ func (s *Service) Run(ctx context.Context, input, output string) (Report, error)
 		if !strings.EqualFold(filepath.Base(name), "chocolateyInstall.ps1") {
 			continue
 		}
-		rewritten, resources, rewriteErr := powershell.RewriteWithOptions(string(data), powershell.Options{PackageVersion: metadata.Version})
+		script := prepareInstallScript(metadata.ID, string(data))
+		rewritten, resources, rewriteErr := powershell.RewriteWithOptions(script, powershell.Options{PackageVersion: metadata.Version})
 		if rewriteErr != nil {
 			return Report{}, fmt.Errorf("rewrite %s: %w", name, rewriteErr)
 		}
@@ -109,6 +113,16 @@ func (s *Service) Run(ctx context.Context, input, output string) (Report, error)
 	}
 	report.Output = output
 	return report, nil
+}
+
+func prepareInstallScript(packageID, script string) string {
+	if !strings.EqualFold(packageID, "firefox") {
+		return script
+	}
+	// Firefox selects a locale at install time and interpolates it into the
+	// installer URLs. Internalization must choose one locale so the embedded
+	// installers and the checksums selected from LanguageChecksums.csv agree.
+	return firefoxRuntimeLocale.ReplaceAllString(script, `${1}$locale = 'en-US'`)
 }
 
 func (s *Service) download(ctx context.Context, source string) ([]byte, error) {

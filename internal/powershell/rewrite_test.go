@@ -113,6 +113,50 @@ Install-ChocolateyZipPackage @packageArgs`
 	}
 }
 
+func TestRewriteSupportsFirefoxArchitectureBuildMap(t *testing.T) {
+	t.Parallel()
+	script := `$locale = 'en-US'
+$builds = @{
+  'x86'   = @{ Url = "https://download.mozilla.org/?product=firefox-155.0.1-ssl&os=win&lang=${locale}"; Checksum = $checksums.Win32 }
+  'x64'   = @{ Url = "https://download.mozilla.org/?product=firefox-155.0.1-ssl&os=win64&lang=${locale}"; Checksum = $checksums.Win64 }
+  'arm64' = @{ Url = "https://download.mozilla.org/?product=firefox-155.0.1-ssl&os=win64-aarch64&lang=${locale}"; Checksum = $checksums.Win64Arm64 }
+}
+$build = Get-MozillaBuild -builds $builds
+$packageArgs = @{ Url = $build.Url; Checksum = $build.Checksum }
+Install-ChocolateyPackage @packageArgs`
+
+	got, resources, err := Rewrite(script)
+	if err != nil {
+		t.Fatalf("Rewrite() error = %v", err)
+	}
+	if len(resources) != 3 {
+		t.Fatalf("Rewrite() resources = %#v, want three architecture installers", resources)
+	}
+	wantFiles := map[string]bool{
+		"firefox-155.0.1-ssl-win.exe":           false,
+		"firefox-155.0.1-ssl-win64.exe":         false,
+		"firefox-155.0.1-ssl-win64-aarch64.exe": false,
+	}
+	for _, resource := range resources {
+		if _, ok := wantFiles[resource.Filename]; !ok {
+			t.Errorf("unexpected resource filename %q", resource.Filename)
+		} else {
+			wantFiles[resource.Filename] = true
+		}
+	}
+	for filename, found := range wantFiles {
+		if !found {
+			t.Errorf("missing resource %q", filename)
+		}
+	}
+	if strings.Contains(got, "download.mozilla.org") {
+		t.Fatalf("Rewrite() retained Mozilla download URL:\n%s", got)
+	}
+	if !strings.Contains(got, "Install-ChocolateyInstallPackage") {
+		t.Fatalf("Rewrite() retained network install helper:\n%s", got)
+	}
+}
+
 func TestRewriteResolvesPowerShellInterpolationForms(t *testing.T) {
 	t.Parallel()
 	script := `$version = '1.22.22'
